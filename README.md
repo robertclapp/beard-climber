@@ -1,6 +1,6 @@
 # Beard Climber
 
-A retro 80s-style vertical climber, inspired by Crazy Climber, where you scale giant beards. Wizard level demo.
+A retro 80s-style vertical climbing game where Pip scales giant beards to cheer up grumpy giants. Demo: Grandpa (tutorial) and the Wizard.
 
 Play: https://robertclapp.github.io/beard-climber/
 
