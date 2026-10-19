@@ -4,4 +4,4 @@ A retro 80s-style vertical climbing game where Pip scales giant beards to cheer 
 
 Play: https://robertclapp.github.io/beard-climber/
 
-Controls: tap left/right alternately to climb, double-tap a side to dyno, two-finger tap to brace, press and hold to grip through sneezes.
+Controls: one-hand mode (default on phones) — tap to climb, swipe left/right to hop, swipe down to climb down. Two-hand mode in Settings: tap left/right alternately, double-tap to hop.
