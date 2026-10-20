@@ -1,6 +1,6 @@
 # Beard Climber
 
-A retro 80s-style vertical climbing game where Pip scales giant beards to cheer up grumpy giants. Demo: World 1 Whiskerton Woods (Grandpa, Goat, Lumberjack, Mountain Man, Bigfoot) and the Wizard.
+A retro 80s-style vertical climbing game where Pip scales giant beards to cheer up grumpy giants. Demo: World 1 Whiskerton Woods, World 2 North Pole, and the Wizard.
 
 Play: https://robertclapp.github.io/beard-climber/
 
