@@ -9,3 +9,31 @@ Controls: one-hand mode (default on phones) — tap to climb, swipe left/right t
 ## License
 
 Copyright (c) 2026 Robert Clapp. All rights reserved. See LICENSE.
+
+## Private development source
+
+The complete procedural Blender and web source is now kept with this private
+repository. The existing root `index.html` and `assets/` remain the unchanged
+release snapshot. The stability-fixed development candidate is `web/index.html`
+with `web/assets/`; edit `web/src/game.js` and `web/src/index.template.html`.
+
+From the repository root, using Python 3.8+ and Node.js 18+:
+
+```sh
+python3 web/build_runtime.py
+npm run check
+python3 -m http.server 8000 --directory web
+```
+
+Open http://localhost:8000/ to preview the fixed development candidate. No package
+installation is needed for the fast checks. The code-only builder preserves the
+checked-in artwork cache; it is not a model/art rebuild.
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the source map, full art pipeline and
+verification limits, and [docs/ASSET_PIPELINE.md](docs/ASSET_PIPELINE.md) for the
+original modeling documentation.
+
+**Do not merge or deploy this source tree until the release packaging/privacy
+guard described in DEVELOPMENT.md is addressed.** A private GitHub repository
+does not by itself make a Pages site private. No Pages settings or deployment
+workflow are changed by this draft.
