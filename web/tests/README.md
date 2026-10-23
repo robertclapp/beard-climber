@@ -61,7 +61,37 @@ and the newly specified recovery/navigation behavior. The baseline is not
 included in this repository; the tests always use the current files by default.
 
 
-The source package adds eight Python standard-library runtime-builder tests.
+The Python standard-library suite covers the cached-runtime builder, release ZIP
+allowlisting/path safety/reproducibility, and installed-browser selection.
 Run `npm run test:build` for these, or `npm run check` for source/output
-synchronization plus both suites. The original `web/test_game.py` browser suite
-is preserved separately and was not executed in this pass.
+synchronization plus all fast tests. Browser selection tests do not launch a
+browser and must not be reported as browser validation.
+
+## Real-browser validation
+
+The original `web/test_game.py` suite drives real CDP touch events and captures
+screenshots/GIFs. It requires Playwright, Pillow, ffmpeg and an installed browser.
+The runner never installs or downloads dependencies. It honors `CHROME_BINARY`
+first, then searches for installed Chrome/Chromium, then Playwright's existing
+browser cache. A bad explicit override fails rather than silently choosing a
+different browser.
+
+```sh
+npm run test:browser
+# Optional explicit installed browser:
+CHROME_BINARY=/path/to/chrome npm run test:browser
+# The original balance bot can run after the browser suite:
+python3 web/balance_check.py grandpa
+```
+
+Run in a disposable working copy: original browser tests overwrite `web/shots/`
+and GIF build frames; the balance bot appends `web/build/balance.jsonl`. The
+balance output directory is now created on a fresh checkout.
+
+On 2026-10-23 browser startup was attempted but blocked before any gameplay
+checks ran: this environment prohibited Chromium's process socket, the supported
+alternate launcher failed during sandbox setup, and the separate cloud browser
+could not access the executor's loopback preview. The original browser/balance
+suites, visual output, audio and Safari/device behavior are therefore still
+unverified. No security restrictions were changed and no public preview was
+created to work around the limit.

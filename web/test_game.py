@@ -1,6 +1,6 @@
 """web/test_game.py - headless Playwright test of web/index.html under iPhone 14 emulation.
 
-  python3 web/test_game.py            (needs: pip install playwright; uses /usr/bin/google-chrome)
+  python3 web/test_game.py            (needs Playwright and Pillow; CHROME_BINARY optionally selects an installed browser)
 
 Drives the game with REAL touch events (CDP Input.dispatchTouchEvent: taps, double taps,
 two-finger taps, long presses), reads state from the window.BC test hook, writes
@@ -10,6 +10,7 @@ Exits non-zero if any check fails.
 import base64, io, json, os, subprocess, sys, time
 from playwright.sync_api import sync_playwright
 from PIL import Image
+from browser_config import browser_executable
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SHOTS = os.path.join(HERE, "shots")
@@ -840,7 +841,7 @@ def world_events(br, p, errors, EVS):
 
 def main():
     with sync_playwright() as p:
-        br = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--autoplay-policy=no-user-gesture-required"])
+        br = p.chromium.launch(executable_path=browser_executable(p.chromium.executable_path), args=["--autoplay-policy=no-user-gesture-required"])
         ctx = br.new_context(**p.devices["iPhone 14"]); watch_net(ctx)
         pg = ctx.new_page()
         errors = []

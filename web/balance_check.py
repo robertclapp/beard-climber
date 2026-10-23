@@ -13,6 +13,7 @@ import json, os, random, sys, time
 from playwright.sync_api import sync_playwright
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_game import Touch, ev, URL_FILE, para_bot, HERE
+from browser_config import browser_executable
 
 OLD = {"AIM": 0.5, "THROW_SLOW": 2.0, "THROW_FAST": 0.85, "FALL_SLOW": 3.6, "FALL_FAST": 5.2, "AIM_TOP": 0.5,
        "UPPER_THROW_K": 1, "UPPER_FALL_K": 1, "UPPER_PAIR": 0, "DEF_BOOST_K": 1}
@@ -82,9 +83,10 @@ def run(pg, t, cfg, skill, seed):
 
 def main():
     cfgs = sys.argv[1:] or ["orig", "none", "noshelter", "hardhat", "life", "slowmo"]
+    os.makedirs(os.path.join(HERE, "build"), exist_ok=True)
     out = open(os.path.join(HERE, "build", "balance.jsonl"), "a")
     with sync_playwright() as p:
-        br = p.chromium.launch(executable_path="/usr/bin/google-chrome", args=["--autoplay-policy=no-user-gesture-required"])
+        br = p.chromium.launch(executable_path=browser_executable(p.chromium.executable_path), args=["--autoplay-policy=no-user-gesture-required"])
         for cfg in cfgs:
             for skill in SKILL:
                 for seed in SEEDS:

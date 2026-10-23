@@ -33,7 +33,11 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for the source map, full art pipeline and
 verification limits, and [docs/ASSET_PIPELINE.md](docs/ASSET_PIPELINE.md) for the
 original modeling documentation.
 
-**Do not merge or deploy this source tree until the release packaging/privacy
-guard described in DEVELOPMENT.md is addressed.** A private GitHub repository
+`npm run release:package` makes a local, allowlisted five-file ZIP after the fast
+checks, without uploading it or changing Pages. See DEVELOPMENT.md for its exact
+contents and safety boundaries.
+
+**Do not merge or deploy this source tree until the release-only publishing
+configuration described in DEVELOPMENT.md is separately approved and verified.** A private GitHub repository
 does not by itself make a Pages site private. No Pages settings or deployment
 workflow are changed by this draft.

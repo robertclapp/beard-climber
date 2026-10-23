@@ -59,7 +59,8 @@ output synchronization; it does not verify artwork against edited Blender models
 ## Verification
 
 `npm run check` combines code/output synchronization, 58 gameplay regression
-tests, and eight cached-builder tests. All pass on the final import. Both world
+tests, and 36 Python tests (eight cached-builder, 21 release-packaging, and
+seven browser-selection tests). All pass on the final import. Both world
 packs, embedded asset JSON and home-screen icons are unchanged. Python and
 JavaScript syntax and Git whitespace checks pass.
 
@@ -71,8 +72,14 @@ is not a fresh validation result.
 
 Outstanding: full art regeneration, original browser/balance suites, Safari and
 physical-device touch/audio/lifecycle testing. The reviewed environment has
-Blender 4.3.2 rather than the documented 4.2.3 LTS, lacks the original runner's
-hardcoded `/usr/bin/google-chrome`, and has no raw `web/build/` cache. Exact
+Blender 4.3.2 rather than the documented 4.2.3 LTS and no raw art-render
+`web/build/` cache. The browser runners now select an installed Chrome/Chromium
+(or an explicit `CHROME_BINARY`) rather than hardcoding one Linux path. Browser
+startup was attempted on 2026-10-23, but this executor prohibited Chromium's
+process socket; the supported alternate launcher failed during sandbox setup.
+The separate cloud browser could not reach the executor's loopback preview.
+No browser gameplay checks ran. See `web/tests/README.md` for the runnable
+browser/balance commands and their output-overwrite boundaries. Exact
 Python/Pillow/numpy/Playwright/browser dependency versions are not pinned in
 the original handoff. No installations or external services are required by
 the new fast checks. No deployment or CI workflow is added by this draft.
@@ -98,6 +105,45 @@ Blender scenes. `run_all.sh` is the separate prototype `out/` preview pipeline.
 Original browser tests also overwrite screenshots/GIFs and require Playwright,
 Chrome and ffmpeg.
 
+## Release-only packaging (local artifact, not deployment)
+
+On POSIX Python (Linux/macOS), prepare a private review artifact with:
+
+```sh
+npm run release:package
+# For another candidate, choose a new name; existing outputs are never replaced:
+npm run release:package -- --output out/release/candidate-2.zip
+```
+
+This first runs all fast checks, then writes `out/release/beard-climber-web.zip`.
+The archive has exactly five explicitly named files:
+
+- `index.html`, copied from the fixed `web/index.html`, not root's old snapshot;
+- `assets/world2.js` and `assets/world3.js`, copied from `web/assets/`;
+- the unchanged `LICENSE`;
+- an empty `.nojekyll` marker.
+
+No directory recursion, glob expansion, or configurable input list is used.
+Extra source files, documentation, `.git`, `.env`, tests, native work, cached
+renders and old outputs cannot enter the archive through a directory copy.
+ZIP metadata and ordering are normalized; identical inputs produce identical
+bytes independent of timestamps and compression-library versions. Only output
+names under `out/release/` are accepted. Existing destinations are refused
+without deletion; source/output symlinks, hardlinked inputs, nonregular inputs,
+and unsafe paths fail closed. The project must be accessed through its canonical
+filesystem path rather than a symlink. Unsupported filesystem safety operations
+fail instead of weakening the checks.
+
+This is an allowlist, not a secret scanner or copy-protection mechanism. The
+shipped JavaScript and artwork remain visible to anyone who receives a browser
+build. Review changes inside allowlisted files before any release. The release
+ZIP itself is a private candidate until separately approved for publication.
+The helper does not copy output to root, modify Pages settings, push or deploy.
+
+The candidate ZIP was inspected for exactly these five names and matching bytes,
+and its extracted contents passed all 58 gameplay regressions. Those are still
+mocked-runtime checks, not a real browser or physical-device pass.
+
 ## Merge/deployment privacy guard
 
 **This draft is not ready to merge or deploy.** The repository is private, but
@@ -105,9 +151,10 @@ a Pages site is not automatically private. Its prior deployments came from
 main's root with `.nojekyll`. Deploying the complete source tree that way could
 make Python source and project documentation downloadable from Pages.
 
-Before merge/release, explicitly choose and approve a release-only branch or
-artifact/folder publishing strategy that ships only `index.html`, `assets/` and
-necessary site files, never the source tree. Then review privacy and run browser/
+The tested allowlisted ZIP supplies the release-only artifact, but it does not
+change the current publishing source. Before merge/release, explicitly choose
+and approve a release-only branch or artifact publishing strategy that uses
+only the five packaged files, never the source tree. Then review privacy and run browser/
 device checks. Changing Pages settings, publishing, merging and enabling
 auto-merge are outside this draft's scope.
 
