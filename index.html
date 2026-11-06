@@ -795,14 +795,18 @@ function outlined(s, x, y, col) {           // readable on any beard colour (the
   text(s, x, y, col, 1, null);
 }
 function text(s, x, y, col, k = 1, shadow = "#000") {
-  s = String(s).toUpperCase().replace(/X/g, "X");
+  s = String(s).toUpperCase()
+    .replace(/[ÁÀÂÄÃÅ]/g, "A").replace(/[ÉÈÊË]/g, "E")
+    .replace(/[ÍÌÎÏ]/g, "I").replace(/[ÓÒÔÖÕ]/g, "O")
+    .replace(/[ÚÙÛÜ]/g, "U").replace(/Ñ/g, "N")
+    .replace(/[¡¿]/g, "!").replace(/★/g, "*").replace(/[^ -~]/g, "?");
   if (shadow) drawStr(s, x + k, y + k, shadow, k);
   drawStr(s, x, y, col, k);
 }
 function drawStr(s, x, y, col, k) {
   ctx.fillStyle = col;
   for (let i = 0; i < s.length; i++) {
-    const g = GLYPH[s[i]] || GLYPH["?"];
+    const g = GLYPH[s[i]] || (s[i] === "*" ? (GLYPH["x"] || GLYPH["X"]) : null) || GLYPH["?"];
     if (s[i] === " ") continue;
     for (let r = 0; r < 7; r++) for (let c = 0; c < 5; c++)
       if (g[r][c] === "1") ctx.fillRect(x + (i * 6 + c) * k, y + r * k, k, k);
@@ -2093,7 +2097,80 @@ function bitmap(rows, x, y, col, edge) {
   ctx.fillStyle = col;
   rows.forEach((r, j) => { for (let i = 0; i < r.length; i++) if (r[i] === "1") ctx.fillRect(x + i, y + j, 1, 1); });
 }
-const MUTE = { x: W - 17, y: () => H - 15, w: 15, h: 13 };
+// ---------------------------------------------------------------- music (lazy HTMLAudio per track, routed via Snd)
+// Files live in music/<key>.mp3 next to index.html (see web/music/README.md). Missing file = silence (one warn).
+// ?musictest=1 points at music/_placeholders/ and also accepts .wav (test-only placeholder loops).
+const MUSIC_TEST = params.get("musictest") === "1";
+const Music = {
+  TRACKS: ["title", "menu", "world1", "world2", "world3", "world4", "world5", "world6", "world7", "world8", "world9", "world10", "finale", "boss", "win"],
+  dir: MUSIC_TEST ? "music/_placeholders/" : "music/", exts: MUSIC_TEST ? ["mp3", "wav"] : ["mp3"],
+  enabled: localStorage.getItem("bc_music") !== "0", el: {}, missing: {}, warned: false,
+  cur: null, winFor: null, winDone: false, hidden: false, VOL: 0.55, DUCK: 0.25, FADE_S: 0.7,
+  setEnabled(v) { this.enabled = !!v; localStorage.setItem("bc_music", this.enabled ? "1" : "0"); },
+  toggle() { this.setEnabled(!this.enabled); },
+  worldTrack(id) {
+    if (id === "ultimate") return "finale";
+    for (let i = 0; i < WORLDS.length; i++) {
+      const lv = WORLDS[i].levels.find((l) => l.id === id);
+      if (lv) return lv.boss && !(S && S.proc) ? "boss" : (i < 10 ? "world" + (i + 1) : "finale");
+    }
+    return "menu";
+  },
+  /** Which track the current screen wants (null = silence). */
+  want() {
+    const sc = screen;
+    if (sc === "title" || sc === "cine") return "title";
+    if (["intro", "play", "ending", "para", "bird"].includes(sc)) {
+      const r = S && S.result;
+      if (r && r.won && !r.endless && sc === "play") {
+        if (this.winFor !== r) { this.winFor = r; this.winDone = false; }
+        if (!this.winDone && !this.missing.win) return "win";
+        return "menu";
+      }
+      return this.worldTrack(LEVEL);
+    }
+    return "menu";
+  },
+  get(k) {
+    if (this.missing[k]) return null;
+    let a = this.el[k]; if (a) return a;
+    a = this.el[k] = new Audio(); a.preload = "auto"; a.loop = k !== "win"; a._ext = 0; a._v = 0; a.volume = 0;
+    a.addEventListener("error", () => {
+      if (++a._ext < this.exts.length) { a.src = this.dir + k + "." + this.exts[a._ext]; a.load(); if (this.cur === k) a.play().catch(() => {}); return; }
+      this.missing[k] = true; delete this.el[k];
+      if (!this.warned) { this.warned = true; console.warn("music: no file for '" + k + "' (silent until music/" + k + ".mp3 exists)"); }
+    });
+    a.addEventListener("ended", () => { if (k === "win") this.winDone = true; });
+    if (Snd.ctx && Snd.master && Snd.ctx.createMediaElementSource) {
+      try { const g = Snd.ctx.createGain(); g.gain.value = 0; Snd.ctx.createMediaElementSource(a).connect(g); g.connect(Snd.master); a._g = g; a.volume = 1; } catch (e) { a._g = null; }
+    }
+    a.src = this.dir + k + "." + this.exts[0];
+    return a;
+  },
+  setVol(a, v) { a._v = v; if (a._g) a._g.gain.value = v; else a.volume = Math.max(0, Math.min(1, v)); },
+  target() { return (!this.enabled || Snd.muted) ? 0 : this.VOL * (paused ? this.DUCK : 1); },
+  update(dt) {
+    if (!Snd.ctx || this.hidden) return;                       // nothing before the first gesture (iOS autoplay)
+    const k = this.enabled ? this.want() : null;
+    if (k !== this.cur) {
+      this.cur = k;
+      const a = k && this.get(k);
+      if (a) { if (k === "win") { try { a.currentTime = 0; } catch (e) {} } a.play().catch(() => {}); }
+    }
+    const step = dt / this.FADE_S * this.VOL;
+    for (const n in this.el) {
+      const a = this.el[n], goal = n === this.cur ? this.target() : 0;
+      const v = a._v < goal ? Math.min(goal, a._v + step) : Math.max(goal, a._v - step);
+      if (v !== a._v) this.setVol(a, v);
+      if (n !== this.cur && v <= 0 && !a.paused) a.pause();
+    }
+  },
+  visibility(hidden) {
+    this.hidden = hidden;
+    for (const n in this.el) { const a = this.el[n]; if (hidden) a.pause(); else if (n === this.cur) a.play().catch(() => {}); }
+  },
+};
+const MUTE = { x: W - 20, y: () => H - 18, w: 18, h: 16 };
 function drawMute() {
   const x = MUTE.x, y = MUTE.y();
   ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(x, y, MUTE.w, MUTE.h);
@@ -2104,13 +2181,13 @@ function drawMute() {
 }
 
 // Pause: HUD button (bottom-left, opposite mute) + overlay with RESUME / MAIN MENU / LEVELS
-const PAUSE_BTN = () => ({ x: 3, y: H - 16, w: 40, h: 14 });
+const PAUSE_BTN = () => ({ x: 3, y: H - 28, w: 48, h: 24 });
 function pauseLayout() {
-  const bw = 120, bh = 22, cx = Math.round((W - bw) / 2), cy = Math.round(H / 2) - 44;
+  const bw = 128, bh = 26, cx = Math.round((W - bw) / 2), cy = Math.round(H / 2) - 52;
   return {
     resume: { x: cx, y: cy + 28, w: bw, h: bh },
-    menu: { x: cx, y: cy + 56, w: bw, h: bh },
-    levels: { x: cx, y: cy + 84, w: bw, h: bh },
+    menu: { x: cx, y: cy + 60, w: bw, h: bh },
+    levels: { x: cx, y: cy + 92, w: bw, h: bh },
   };
 }
 function drawPauseBtn() {
@@ -2640,6 +2717,7 @@ function frame(ts) {
   lastFrame = ts; now = ts;
   fpsN++; if (ts - fpsT > 1000) { fps = fpsN; fpsN = 0; fpsT = ts; }
   for (const k in IMG) if (!IMG[k].complete) return;
+  Music.update(dt);
   if (screen === "title") drawTitle();
   else if (screen === "daily") drawDaily();
   else if (screen === "endless") drawEndless();
@@ -3081,12 +3159,12 @@ function drawButton(b, label, hot, col) {
   text(label, b.x + Math.round((b.w - textW(label)) / 2), b.y + Math.round((b.h - 7) / 2), hot ? "#000" : C.white, 1, hot ? null : "#000");
 }
 const inRect = (p, b) => p.x >= b.x && p.x < b.x + b.w && p.y >= b.y && p.y < b.y + b.h;
-const TITLE_DAILY_BTN = () => ({ x: 6, y: H - 70, w: 104, h: 22 });
-const TITLE_ENDLESS_BTN = () => ({ x: 114, y: H - 70, w: W - 120, h: 22 });
-const TITLE_INTRO_BTN = () => ({ x: 6, y: H - 44, w: 68, h: 22 });
-const TITLE_LEVELS_BTN = () => ({ x: 78, y: H - 44, w: 68, h: 22 });
-const TITLE_SHOP_BTN = () => ({ x: 150, y: H - 44, w: 68, h: 22 });
-const TITLE_GEAR_BTN = () => ({ x: W - 24, y: 3, w: 21, h: 19 });
+const TITLE_DAILY_BTN = () => ({ x: 6, y: H - 82, w: 104, h: 26 });
+const TITLE_ENDLESS_BTN = () => ({ x: 114, y: H - 82, w: W - 120, h: 26 });
+const TITLE_INTRO_BTN = () => ({ x: 6, y: H - 50, w: 68, h: 26 });
+const TITLE_LEVELS_BTN = () => ({ x: 78, y: H - 50, w: 68, h: 26 });
+const TITLE_SHOP_BTN = () => ({ x: 150, y: H - 50, w: 68, h: 26 });
+const TITLE_GEAR_BTN = () => ({ x: W - 28, y: 3, w: 24, h: 24 });
 function drawGear(b) {
   ctx.fillStyle = "rgba(0,0,0,0.65)"; ctx.fillRect(b.x, b.y, b.w, b.h);
   ctx.fillStyle = C.hardhat; ctx.fillRect(b.x, b.y, b.w, 1); ctx.fillRect(b.x, b.y + b.h - 1, b.w, 1); ctx.fillRect(b.x, b.y, 1, b.h); ctx.fillRect(b.x + b.w - 1, b.y, 1, b.h);
@@ -3134,21 +3212,23 @@ function drawChoose() {
 // Settings screen: controls (ONE HAND / TWO HANDS) + sound. Opened from the title gear (or G key).
 const Settings = { sel: 0, from: "title" };
 function settingsLayout() {
-  const y = Math.round(H * 0.22);
-  return { controls: { x: 24, y: y + 30, w: W - 48, h: 26 }, sound: { x: 24, y: y + 128, w: W - 48, h: 26 }, easy: { x: 24, y: y + 192, w: W - 48, h: 26 }, back: { x: W / 2 - 40, y: H - 40, w: 80, h: 22 }, y };
+  const y = Math.round(H * 0.22), half = Math.floor((W - 60) / 2);
+  return { controls: { x: 24, y: y + 30, w: W - 48, h: 28 }, sound: { x: 24, y: y + 128, w: half, h: 28 }, easy: { x: 24, y: y + 196, w: W - 48, h: 28 }, music: { x: 36 + half, y: y + 128, w: half, h: 28 }, back: { x: W / 2 - 44, y: H - 42, w: 88, h: 26 }, y };
 }
 function openSettings(from) { Settings.from = from || "title"; Settings.sel = 0; setScreen("settings"); }
 function settingsAct(i) {
   if (i === 0) { setControls(controls === "one" ? "two" : "one"); Snd.tone(760, 0.04, 0.05); }
   else if (i === 1) Snd.toggle();
   else if (i === 2) { setEasy(!easy); Snd.tone(660, 0.04, 0.05); }
+  else if (i === 4) { Music.toggle(); Snd.tone(620, 0.04, 0.05); }
   else setScreen(Settings.from);
 }
-function settingsTap(p) { const L = settingsLayout(); [L.controls, L.sound, L.easy, L.back].forEach((b, i) => { if (inRect(p, b)) { Settings.sel = i; settingsAct(i); } }); }
+function settingsTap(p) { const L = settingsLayout(); [L.controls, L.sound, L.easy, L.back, L.music].forEach((b, i) => { if (inRect(p, b)) { Settings.sel = i; settingsAct(i); } }); }
 function settingsKey(code) {
   if (code === "Escape" || code === "Backspace" || code === "KeyG") { setScreen(Settings.from); return; }
-  if (code === "ArrowUp" || code === "KeyW") Settings.sel = (Settings.sel + 3) % 4;
-  else if (code === "ArrowDown" || code === "KeyS") Settings.sel = (Settings.sel + 1) % 4;
+  const ORD = [0, 1, 4, 2, 3], at = Math.max(0, ORD.indexOf(Settings.sel));   // visual order: controls, sound, music, difficulty, back
+  if (code === "ArrowUp" || code === "KeyW") Settings.sel = ORD[(at + 4) % 5];
+  else if (code === "ArrowDown" || code === "KeyS") Settings.sel = ORD[(at + 1) % 5];
   else if (["Enter", "Space", "ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(code)) settingsAct(Settings.sel);
 }
 function drawSettings() {
@@ -3160,9 +3240,11 @@ function drawSettings() {
   const help = controls === "one" ? ["TAP ANYWHERE: CLIMB", "SWIPE LEFT/RIGHT: HOP", "SWIPE DOWN: CLIMB DOWN", "HOLD: HOLD TIGHT"]
     : ["TAP LEFT/RIGHT HALF: ARMS", "DOUBLE-TAP ONE SIDE: LEAP", "SWIPE DOWN: CLIMB DOWN", "HOLD: HOLD TIGHT"];
   help.forEach((l, i) => text(l, L.controls.x + 4, L.controls.y + 31 + i * 10, C.hair3));
-  text("SOUND", L.sound.x, L.sound.y - 11, C.acc2);
+  text("MUSIC", L.music.x + Math.round((L.music.w - textW("MUSIC")) / 2), L.music.y - 11, C.acc2);
+  drawButton(L.music, Music.enabled ? "< ON >" : "< OFF >", Settings.sel === 4);
+  text("SOUND", L.sound.x + Math.round((L.sound.w - textW("SOUND")) / 2), L.sound.y - 11, C.acc2);
   drawButton(L.sound, Snd.muted ? "< OFF >" : "< ON >", Settings.sel === 1);
-  text("KEYBOARD WORKS IN BOTH MODES", L.sound.x + 4, L.sound.y + 34, C.hair3);
+  text("KEYBOARD WORKS IN BOTH MODES", L.sound.x + 4, L.sound.y + 36, C.hair3);
   text("DIFFICULTY", L.easy.x, L.easy.y - 11, C.acc2);
   drawButton(L.easy, easy ? "< EASY >" : "< NORMAL >", Settings.sel === 2);
   text(easy ? "SLOWER HAZARDS, SOFTER BUMPS," : "THE GIANTS GET TOUGHER AS YOU GO", L.easy.x + 4, L.easy.y + 34, C.hair3);
@@ -3210,7 +3292,7 @@ const WORLDS = [
     { id: "quilt", n: "10-7", name: "QUILT BEARD" }, { id: "candle", n: "10-8", name: "CANDLE BEARD" },
     { id: "magnet", n: "10-9", name: "MAGNET BEARD" }, { id: "origami", n: "10-10", name: "ORIGAMI", boss: true }] },
   { name: "FINALE", col: "#f0e040", levels: [
-    { id: "ultimate", n: "★", name: "ULTIMATE BEARD", boss: true }] },
+    { id: "ultimate", n: "11", name: "ULTIMATE BEARD", boss: true }] },
 ];
 const LV_ROWS = WORLDS.reduce((a, w) => a.concat(w.levels), []);
 function levelState(id) { return !known(id) ? "soon" : isUnlocked(id) ? "open" : "locked"; }
@@ -3224,7 +3306,7 @@ function openLevels(from) {
 }
 function levelsLayout() {
   const top = 22, bh = H > 300 ? 30 : 26, back = { x: 4, y: H - bh - 4, w: 60, h: bh }, play = { x: 68, y: H - bh - 4, w: W - 72, h: bh };
-  const daily = { x: W - 72, y: 2, w: 68, h: 16 };
+  const daily = { x: W - 70, y: 3, w: 66, h: 18 };
   const listTop = top, listBot = back.y - 4, viewH = listBot - listTop, rh = LV_ROW_H, hh = LV_HEAD_H;
   const rowsRaw = [], headsRaw = []; let y = 0;
   WORLDS.forEach((w) => { headsRaw.push({ y, w }); y += hh; w.levels.forEach((lv) => { rowsRaw.push({ x: 6, y, w: W - 12, h: rh - 2, lv }); y += rh; }); });
@@ -3288,7 +3370,7 @@ function levelsKey(code) {
 function drawLevels() {
   const L = levelsLayout(), t = now / 1000;
   ctx.fillStyle = "#101030"; ctx.fillRect(0, 0, W, H); stars(t, 24);
-  textC("SELECT LEVEL", 4, C.hardhat, 2);
+  text("SELECT LEVEL", 6, 4, C.hardhat, 2);
   drawButton(L.daily, "DAILY", !dailyPlayedToday() && Math.floor(t * 2) % 2 === 0, C.acc2);
   ctx.save();
   ctx.beginPath(); ctx.rect(0, L.listTop, W, L.viewH); ctx.clip();
@@ -3302,10 +3384,12 @@ function drawLevels() {
     ctx.fillStyle = hot ? "rgba(248,232,72,0.18)" : st === "open" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.25)"; ctx.fillRect(r.x, r.y, r.w, r.h);
     if (hot) { ctx.fillStyle = C.hardhat; ctx.fillRect(r.x, r.y, r.w, 1); ctx.fillRect(r.x, r.y + r.h - 1, r.w, 1); ctx.fillRect(r.x, r.y, 1, r.h); ctx.fillRect(r.x + r.w - 1, r.y, 1, r.h); }
     const ty = r.y + (two && st === "locked" ? 3 : Math.round((r.h - 7) / 2)), dim = st === "open" ? C.white : "#8080a0";
-    ctx.fillStyle = st === "open" ? C.hardhat : "#504870"; ctx.fillRect(r.x + 3, ty - 2, 22, 11);
+    const nw = Math.max(22, textW(String(lv.n)) + 6);
+    ctx.fillStyle = st === "open" ? C.hardhat : "#504870"; ctx.fillRect(r.x + 3, ty - 2, nw, 11);
     text(lv.n, r.x + 5, ty, st === "open" ? "#000" : "#a0a0c0", 1, null);
-    text(lv.name, r.x + 30, ty, dim);
-    if (lv.boss) text("BOSS", r.x + 30 + textW(lv.name) + 6, ty, st === "open" ? C.shirt : "#a06070");
+    const nx = r.x + 3 + nw + 4;
+    text(lv.name, nx, ty, dim);
+    if (lv.boss) text("BOSS", nx + textW(lv.name) + 6, ty, st === "open" ? C.shirt : "#a06070");
     const rx = r.x + r.w - 4;
     if (st === "open") {
       if (cheered.has(lv.id)) bitmap(STAR, rx - 40, ty, C.hardhat);
@@ -4465,7 +4549,7 @@ document.addEventListener("keyup", (e) => {
   paraHold();
 });
 let paused = false;
-document.addEventListener("visibilitychange", () => { if (document.hidden && Snd.ctx) Snd.ctx.suspend(); else if (Snd.ctx) Snd.ctx.resume(); lastFrame = 0; });
+document.addEventListener("visibilitychange", () => { Music.visibility(document.hidden); if (document.hidden && Snd.ctx) Snd.ctx.suspend(); else if (Snd.ctx) Snd.ctx.resume(); lastFrame = 0; });
 
 // ---------------------------------------------------------------- test / debug hooks (used by web/test_game.py)
 window.BC = {
@@ -4473,7 +4557,7 @@ window.BC = {
   get ROWS() { return ROWS; }, get LEVEL() { return LEVEL; }, loadLevel, isUnlocked, levelsLayout, openLevels, get Levels() { return Levels; },
   get paused() { return paused; }, setPaused(v) { paused = !!v; }, pauseLayout, PAUSE_BTN, pauseToMenu, pauseToLevels,
   TITLE_LEVELS_BTN, TITLE_GEAR_BTN, settingsLayout, openSettings, get Settings() { return Settings; }, climbDown, tutText,
-  get Snd() { return Snd; }, STORIES, CHAIN, nextLevel, owns(id) { return isOwned(CAT_BY_ID[id]); }, get story() { return STORY(); }, CATALOG, chooseLayout, needsChoose, get controls() { return controls; }, setControls, get lastSwipe() { return lastSwipe; }, TUT_STEPS, get tutStep() { return tutStep(); }, get H() { return H; }, get scale() { return scale; }, get poki() { return Poki.on; },
+  get Snd() { return Snd; }, Music, STORIES, CHAIN, nextLevel, owns(id) { return isOwned(CAT_BY_ID[id]); }, get story() { return STORY(); }, CATALOG, chooseLayout, needsChoose, get controls() { return controls; }, setControls, get lastSwipe() { return lastSwipe; }, TUT_STEPS, get tutStep() { return tutStep(); }, get H() { return H; }, get scale() { return scale; }, get poki() { return Poki.on; },
   tileAt,
   start() { newGame(); setScreen("play"); },
   get look() { return look; }, setLook(l) { look = sanitizeLook(l); saveLook(); },
