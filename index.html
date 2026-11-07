@@ -581,6 +581,12 @@ function setEasy(v) {
   easy = !!v; localStorage.setItem("bc_easy", easy ? "1" : "0");
   if (screen !== "play") loadLevel(LEVEL);
 }
+// ---- Large text (Settings; localStorage bc_large): bigger HUD / menu labels + taller tap targets.
+let largeText = params.get("large") ? params.get("large") === "1" : localStorage.getItem("bc_large") === "1";
+function setLargeText(v) { largeText = !!v; localStorage.setItem("bc_large", largeText ? "1" : "0"); }
+/** UI text scale: titles / buttons / HUD prefer k=2 when LARGE TEXT is on. */
+function tk(k = 1) { return largeText ? Math.max(2, k | 0) : k; }
+
 function loadLevel(id) {
   if (!LV[id]) id = "wizard";
   LEVEL = id;
@@ -1155,12 +1161,37 @@ let UiFx = [];                                 // screen-space confetti (win / r
 // Capacitor (or screenshots) can set window.bcSafeInsets = {t,r,b,l} so HUD/menus clear the notch
 // while the beard art stays edge-to-edge under a translucent status bar.
 const Safe = { t: 0, r: 0, b: 0, l: 0 };
+/** Read notch / home-bar insets into Safe (game px).
+ *  Priority: window.bcSafeInsets (Capacitor / tests) > auto-probe when #wrap is full-bleed
+ *  (no CSS safe-area padding) via a hidden env(safe-area-inset-*) element. When #wrap already
+ *  letterboxes with CSS padding, Safe stays 0 so HUD isn't double-padded. */
 function syncSafe() {
   const o = window.bcSafeInsets;
   if (o && typeof o === "object") {
     Safe.t = Math.max(0, o.t | 0); Safe.r = Math.max(0, o.r | 0);
     Safe.b = Math.max(0, o.b | 0); Safe.l = Math.max(0, o.l | 0);
-  } else { Safe.t = Safe.r = Safe.b = Safe.l = 0; }
+    return;
+  }
+  try {
+    const cs = getComputedStyle(wrap);
+    const padT = parseFloat(cs.paddingTop) || 0;
+    // CSS already letterboxed the canvas — keep HUD at 0 so we don't double-pad.
+    if (padT > 0.5) { Safe.t = Safe.r = Safe.b = Safe.l = 0; return; }
+    let probe = document.getElementById("bc-safe-probe");
+    if (!probe) {
+      probe = document.createElement("div");
+      probe.id = "bc-safe-probe";
+      probe.setAttribute("aria-hidden", "true");
+      probe.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;"
+        + "padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)";
+      document.body.appendChild(probe);
+    }
+    const ps = getComputedStyle(probe);
+    const cssPerGame = Math.max(0.001, cv.getBoundingClientRect().width / W);
+    const toGame = (v) => Math.max(0, Math.round((parseFloat(v) || 0) / cssPerGame));
+    Safe.t = toGame(ps.paddingTop); Safe.r = toGame(ps.paddingRight);
+    Safe.b = toGame(ps.paddingBottom); Safe.l = toGame(ps.paddingLeft);
+  } catch (e) { Safe.t = Safe.r = Safe.b = Safe.l = 0; }
 }
 /** Short phone buzzes. Tied to SOUND (off when muted). Capacitor can override window.bcHaptic. */
 window.bcHaptic = window.bcHaptic || function (kind) {
@@ -1183,6 +1214,7 @@ function newGame() {
     lives: 3, maxLives: 3, boosts: [], magnet: false, slowUntil: 0, hat: 0, hatFlashUntil: 0, score: 0, maxZ: z0, hatsGot: 0, hitsAbsorbed: 0,
     haz: [], items: [], fx: [], texts: [],
     tissueUntil: 0, cocoaUntil: 0, cocoaDir: 1, cocoaNudge: 0, cheerUntil: 0,
+    combo: 0, comboUntil: 0,
     nextThrow: 1.2, mouthOpenUntil: -1,
     sneeze: { next: T.SNEEZES ? T.SNEEZE_FIRST : 1e9, phase: "none", t0: 0, judged: false },
     shake: 0, camZ: z0 - 1.3, result: null, lastHatThrow: -99, seenSneeze: false,
@@ -1440,7 +1472,7 @@ function mushBoost(it) {
   const cl = S.cl; finishTween();
   const toZ = Math.min(GOAL_Z, cl.z + T.MUSH_UP);
   cl.tw = { fromZ: cl.z, toZ, t0: S.t, ms: 420, side: cl.arm === "L" ? "R" : "L" };
-  S.mushes = (S.mushes || 0) + 1; S.score += 75; Snd.play("pickup"); scorePop(75, cl.x, cl.z + 2.6);
+  S.mushes = (S.mushes || 0) + 1; S.score += 75; Snd.play("pickup"); scorePop(75, cl.x, cl.z + 2.6); noteCombo();
   if (LEVEL === "viking") { popText("FOAM!", cl.x, cl.z + 2.3, "#f8e8c0", 1.0); sparkle(it.x, it.z, 10, "#f8e8c0"); }
   else if (LEVEL === "hippie") { popText("FLOWER!", cl.x, cl.z + 2.3, "#e040a0", 1.0); sparkle(it.x, it.z, 10, "#40c060"); }
   else if (LEVEL === "beardedlady") { popText("GLITTER!", cl.x, cl.z + 2.3, "#f0c040", 1.0); sparkle(it.x, it.z, 10, "#f0a0c0"); }
@@ -1483,9 +1515,39 @@ function bounceY(base, amp = 2, speed = 7) {
   return base + Math.round(Math.sin(now / 1000 * speed) * amp);
 }
 
+/** Whisker combo: consecutive clean grabs/pickups. Tiny score bonus only; hits reset it. */
+function noteCombo() {
+  if (!S || S.result) return;
+  S.combo = (S.combo || 0) + 1;
+  S.comboUntil = S.t + 2.6;
+  if (S.combo < 2) return;
+  const bonus = Math.min(25, (S.combo - 1) * 5);          // cosmetic / tiny: +5..+25
+  if (bonus) { S.score += bonus; scorePop(bonus, S.cl.x, S.cl.z + 3.15); }
+  popText("WHISKER COMBO x" + S.combo, S.cl.x, S.cl.z + 2.75, C.acc2, 1.05);
+  sparkle(S.cl.x, S.cl.z + 1.3, Math.min(8, 2 + S.combo), C.acc2);
+}
+function resetCombo() { if (S) { S.combo = 0; S.comboUntil = 0; } }
+
+/** Landing dust puffs under Pip (dyno / fall land). Capped by FX_CAP. */
+function landDust(x, z) {
+  if (!S || REDUCE_MOTION) return;
+  let n = 8;
+  n = Math.min(n, Math.max(0, FX_CAP - S.fx.length));
+  const cols = ["#e8d4b0", "#c4a882", "#d8c4a0", "#a88860", "#f0e0c0"];
+  for (let i = 0; i < n; i++) {
+    S.fx.push({
+      x: x + rand(-0.35, 0.35), z: z + 0.05,
+      vx: rand(-2.2, 2.2), vz: rand(0.5, 1.8),
+      t0: S.t, dur: rand(0.28, 0.55),
+      col: cols[i % cols.length], dust: true,
+    });
+  }
+}
+
 function getHat(from) {
   S.hat = T.HAT_HITS; S.hatsGot++; S.score += 200; Snd.play("pickup");
   popText("HARD HAT!", S.cl.x, S.cl.z + 2.3, C.hardhat, 1.2); scorePop(200, S.cl.x, S.cl.z + 2.7); sparkle(S.cl.x, S.cl.z + 1.6, 10, C.hardhat);
+  noteCombo();
 }
 
 /** A hazard reached the climber. Order: brace deflects > hard hat absorbs > lose a life. */
@@ -1496,6 +1558,7 @@ function hit(h) {
     S.score += 25; sfx.block(); popText("BLOCK!", cl.x, cl.z + 2.3, C.acc2); sparkle(h.x, h.z, 6, C.white); return "brace";
   }
   if (S.hat > 0) {
+    resetCombo();
     S.hat--; S.hitsAbsorbed++; S.score += 100; S.hatFlashUntil = S.t + 0.3; S.shake = Math.max(S.shake, 2); haptic("hit");
     sparkle(h.x, h.z, 6, C.hardhat);
     if (S.hat === 0) {                                  // third hit: the hat pops off
@@ -1505,11 +1568,13 @@ function hit(h) {
     return "hat";
   }
   if (T.TUTORIAL) {                                     // tutorial: a bonk only knocks you down a little
+    resetCombo();
     S.hitsTaken = (S.hitsTaken || 0) + 1; Snd.play("hurt", 0.6); S.shake = 3; haptic("hit");
     popText("BONK! NO HARM DONE", cl.x, cl.z + 2.3, C.white, 1.0);
     knockDown(T.KNOCK_HIT); cl.invulnUntil = S.t + T.INVULN_MS / 1000;
     return "bonk";
   }
+  resetCombo();
   S.lives--; S.hitsTaken = (S.hitsTaken || 0) + 1; Snd.play("hurt"); S.shake = 4; haptic("hit");
   popText(S.lives > 0 ? "OUCH!" : "OH NO!", cl.x, cl.z + 2.3, C.shirt);
   knockDown(T.KNOCK_HIT); cl.invulnUntil = S.t + T.INVULN_MS / 1000;
@@ -1635,6 +1700,7 @@ function update(dt) {
     if (k >= 1) {
       cl.z = cl.toZ; cl.x = cl.toX; cl.mode = "climb"; cl.trail = null;
       cl.landUntil = S.t + 0.18;                                 // brief land squash
+      landDust(cl.x, cl.z);
       if (S.lives <= 0 && !T.TUTORIAL) endGame(false);
     }
   }
@@ -1696,7 +1762,7 @@ function update(dt) {
       if (!S.result && !window.BC.ghost && Math.abs(h.x - cl.x) < 0.55 && h.z > cl.z - 0.1 && h.z < cl.z + 2.1) {
         if (h.good) { h.dead = true; getHat(); }
         else if (h.gold) { h.dead = true; S.goldGot = (S.goldGot || 0) + 1; S.score += 100; Snd.play("pickup"); scorePop(100, cl.x, cl.z + 2.6);
-                           popText("GOLD! +" + T.EARN_GOLD, cl.x, cl.z + 2.3, C.hardhat, 0.9); sparkle(h.x, h.z, 8, C.hardhat); }
+                           popText("GOLD! +" + T.EARN_GOLD, cl.x, cl.z + 2.3, C.hardhat, 0.9); sparkle(h.x, h.z, 8, C.hardhat); noteCombo(); }
         else if (isSlap(h.kind)) { if (S.t >= cl.invulnUntil) { if (shelterNow()) bounceOff(h); else slapHit(h); } }
         else if (S.t >= cl.invulnUntil) { if (shelterNow()) bounceOff(h); else hit(h); }
       }
@@ -1709,7 +1775,7 @@ function update(dt) {
     it.t += dt;
     if (!it.dead && Math.abs(it.x - cl.x) < 0.5 && Math.abs(cl.z + T.HAND - it.z) < 0.7) {
       it.dead = true;
-      if (it.kind === "page") { S.pages++; S.score += 150; sfx.page(); popText(STORY().page + " " + S.pages + "/" + T.PAGES, cl.x, cl.z + 2.3, C.white, 1.1); scorePop(150, cl.x, cl.z + 2.7); sparkle(it.x, it.z, 8, C.white); }
+      if (it.kind === "page") { S.pages++; S.score += 150; sfx.page(); popText(STORY().page + " " + S.pages + "/" + T.PAGES, cl.x, cl.z + 2.3, C.white, 1.1); scorePop(150, cl.x, cl.z + 2.7); sparkle(it.x, it.z, 8, C.white); noteCombo(); }
       else if (it.kind === "mush") { if (cl.mode === "climb" && !S.result) mushBoost(it); else it.dead = false; }
       else getHat();
     }
@@ -1765,7 +1831,7 @@ function update(dt) {
     }
   }
   // --- fx, texts, camera
-  for (const f of S.fx) { f.vz -= (f.hat || f.slap ? 14 : 6) * dt; f.x += f.vx * dt; f.z += f.vz * dt; }
+  for (const f of S.fx) { f.vz -= (f.hat || f.slap ? 14 : f.dust ? 2.4 : 6) * dt; f.x += f.vx * dt; f.z += f.vz * dt; }
   S.fx = S.fx.filter((f) => S.t - f.t0 < f.dur);
   S.texts = S.texts.filter((t) => S.t - t.t0 < t.dur);
   S.shake = Math.max(0, S.shake - dt * 10);
@@ -2163,8 +2229,8 @@ function drawWorld() {
     if (f.hat) spr("hat_" + (Math.floor((S.t - f.t0) * 14) % 4), sx(f.x), sy(f.z));
     else if (f.slap) drawSlapSprite(f.slap, sx(f.x), sy(f.z), (S.t - f.t0) * 14);
     else {
-      const sz = f.whisk ? 2 + (Math.floor((S.t - f.t0) * 8) % 2) : 2;
-      ctx.fillStyle = f.col; ctx.fillRect(sx(f.x), sy(f.z), sz, sz);
+      const sz = f.whisk ? 2 + (Math.floor((S.t - f.t0) * 8) % 2) : f.dust ? 2 + (Math.floor((S.t - f.t0) * 9) % 2) : 2;
+      ctx.fillStyle = f.col; ctx.fillRect(sx(f.x) - (f.dust ? 1 : 0), sy(f.z), sz + (f.dust ? 1 : 0), sz);
     }
   }
   for (const t of S.texts) {
@@ -2267,6 +2333,7 @@ const Music = {
   want() {
     const sc = screen;
     if (sc === "title" || sc === "cine") return "title";
+    if (sc === "story") return (MUSIC_TEST || (A.musicTracks || []).indexOf("finale") >= 0) ? "finale" : "win";
     if (["intro", "play", "ending", "para", "bird"].includes(sc)) {
       const r = S && S.result;
       if (r && r.won && !r.endless && sc === "play") {
@@ -2381,22 +2448,28 @@ function pauseTap(p) {
 }
 
 function drawHUD() {
-  const top = Safe.t;
-  ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, top, W, 11);
-  text(String(S.score).padStart(6, "0"), 3 + Safe.l, 2 + top, C.white);
-  const ml = S.maxLives || 3, hx = ml > 3 ? 88 : 84;
-  for (let i = 0; i < ml; i++) bitmap(HEART, 48 + i * (ml > 3 ? 8 : 9), 3 + top, i < S.lives ? C.shirt : "#3a2a50");
+  const top = Safe.t, hk = tk(), barH = largeText ? 18 : 11;
+  ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(0, top, W, barH);
+  text(String(S.score).padStart(6, "0"), 3 + Safe.l, 2 + top, C.white, hk);
+  const ml = S.maxLives || 3, hx = largeText ? (ml > 3 ? 108 : 104) : (ml > 3 ? 88 : 84);
+  for (let i = 0; i < ml; i++) bitmap(HEART, (largeText ? 68 : 48) + i * (ml > 3 ? 8 : 9), 3 + top + (largeText ? 2 : 0), i < S.lives ? C.shirt : "#3a2a50");
   if (S.hat > 0) {                                     // hard-hat pips = hits left
-    text("HAT", hx, 2 + top, C.hardhat);
-    for (let i = 0; i < 3; i++) bitmap(PIP, hx + 20 + i * 9, 5 + top, i < S.hat ? C.hardhat : "#3a2a50");
+    text("HAT", hx, 2 + top, C.hardhat, hk);
+    for (let i = 0; i < 3; i++) bitmap(PIP, hx + (largeText ? 28 : 20) + i * 9, 5 + top + (largeText ? 2 : 0), i < S.hat ? C.hardhat : "#3a2a50");
   }
   drawBoostHUD();
-  bitmap(PAGE_ICON, 137, 2 + top, C.white, "#000"); text(S.pages + "/" + T.PAGES, 145, 2 + top, C.white);
+  const pageX = largeText ? 150 : 137;
+  bitmap(PAGE_ICON, pageX, 2 + top + (largeText ? 2 : 0), C.white, "#000"); text(S.pages + "/" + T.PAGES, pageX + 8, 2 + top, C.white, hk);
   const best = "HI " + String(Math.max(hiscore, S.score)).padStart(6, "0");
-  text(best, W - textW(best) - 3 - Safe.r, 2 + top, C.acc2);
-  if (easy) { ctx.fillStyle = "#2a8a3a"; ctx.fillRect(2, 13 + top, textW("EASY") + 4, 9); text("EASY", 4, 14 + top, C.white); }
+  text(best, W - textW(best, hk) - 3 - Safe.r, 2 + top, C.acc2, hk);
+  if (easy) { ctx.fillStyle = "#2a8a3a"; ctx.fillRect(2, 2 + top + barH, textW("EASY", hk) + 4, largeText ? 12 : 9); text("EASY", 4, 3 + top + barH, C.white, hk); }
+  if (S.combo >= 2 && S.comboUntil && S.t < S.comboUntil) {
+    const cs = "x" + S.combo, cw = textW(cs, hk);
+    ctx.fillStyle = "rgba(20,10,40,0.72)"; ctx.fillRect(W - cw - 10 - Safe.r, 14 + top + (largeText ? 8 : 0), cw + 6, largeText ? 14 : 10);
+    text(cs, W - cw - 7 - Safe.r, 15 + top + (largeText ? 8 : 0), C.acc2, hk);
+  }
   // height meter (right edge)
-  const mx = W - 6 - Safe.r, m0 = 16 + top, m1 = H - 22 - Safe.b;
+  const mx = W - 6 - Safe.r, m0 = 16 + top + (largeText ? 8 : 0), m1 = H - 22 - Safe.b;
   ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(mx - 1, m0 - 1, 4, m1 - m0 + 2);
   ctx.fillStyle = C.hair1; ctx.fillRect(mx, m0, 2, m1 - m0);
   const my = Math.round(m1 - (m1 - m0) * progress());
@@ -2821,6 +2894,7 @@ function drawTitle() {
   const y = bounceY(Math.round(H * 0.24) + Safe.t, REDUCE_MOTION ? 0 : 2, 4);
   textC("BEARD", y, C.hardhat, 4); textC("CLIMBER", y + 34, C.hardhat, 4);
   textC("LEVEL " + LEVEL_NAMES[LEVEL], y + 72, C.acc2);
+  drawBeatenMark(y - 22);
   // idle bob / squash on menu Pip
   const py = y + 160, bob = REDUCE_MOTION ? 0 : Math.round(Math.sin(t * 3.1) * 3);
   const sqY = REDUCE_MOTION ? 1 : 1 + Math.sin(t * 3.1) * 0.05, sqX = REDUCE_MOTION ? 1 : 1 - Math.sin(t * 3.1) * 0.035;
@@ -2895,6 +2969,7 @@ function frame(ts) {
   else if (screen === "ending") { if (!paused) updateEnding(dt); drawWorld(); drawEnding(); }
   else if (screen === "para") { if (!paused) updatePara(dt); drawWorld(); drawPara(); }
   else if (screen === "bird") { if (!paused) updateBird(dt); drawWorld(); drawBird(); }
+  else if (screen === "story") { if (!paused) updateStory(dt); drawStory(); }
   else if (screen === "results") drawResults();
   else if (screen === "shop") drawShop();
   else if (screen === "levels") drawLevels();
@@ -3352,7 +3427,8 @@ function drawButton(b, label, hot, col) {
   ctx.fillStyle = hot ? C.hardhat : "rgba(0,0,0,0.65)"; ctx.fillRect(b.x + ox, b.y + oy, sw, sh);
   ctx.fillStyle = col || C.hardhat; ctx.fillRect(b.x + ox, b.y + oy, sw, 1); ctx.fillRect(b.x + ox, b.y + oy + sh - 1, sw, 1);
   ctx.fillRect(b.x + ox, b.y + oy, 1, sh); ctx.fillRect(b.x + ox + sw - 1, b.y + oy, 1, sh);
-  text(label, b.x + ox + Math.round((sw - textW(label)) / 2), b.y + oy + Math.round((sh - 7) / 2), hot ? "#000" : C.white, 1, hot ? null : "#000");
+  const kk = (largeText && textW(label, 2) <= sw - 4) ? 2 : 1;
+  text(label, b.x + ox + Math.round((sw - textW(label, kk)) / 2), b.y + oy + Math.round((sh - 7 * kk) / 2), hot ? "#000" : C.white, kk, hot ? null : "#000");
 }
 const inRect = (p, b) => p.x >= b.x && p.x < b.x + b.w && p.y >= b.y && p.y < b.y + b.h;
 const TITLE_DAILY_BTN = () => ({ x: 6 + Safe.l, y: H - 82 - Safe.b, w: 104, h: 26 });
@@ -3408,8 +3484,17 @@ function drawChoose() {
 // Settings screen: controls (ONE HAND / TWO HANDS) + sound. Opened from the title gear (or G key).
 const Settings = { sel: 0, from: "title" };
 function settingsLayout() {
-  const y = Math.round(H * 0.22) + Safe.t, half = Math.floor((W - 60) / 2);
-  return { controls: { x: 24, y: y + 30, w: W - 48, h: 28 }, sound: { x: 24, y: y + 128, w: half, h: 28 }, easy: { x: 24, y: y + 196, w: W - 48, h: 28 }, music: { x: 36 + half, y: y + 128, w: half, h: 28 }, back: { x: W / 2 - 44, y: H - 42 - Safe.b, w: 88, h: 26 }, y };
+  const y = Math.round(H * 0.18) + Safe.t, half = Math.floor((W - 60) / 2);
+  const bh = largeText ? 32 : 28;
+  return {
+    controls: { x: 24, y: y + 26, w: W - 48, h: bh },
+    sound: { x: 24, y: y + 122, w: half, h: bh },
+    music: { x: 36 + half, y: y + 122, w: half, h: bh },
+    easy: { x: 24, y: y + 188, w: half, h: bh },
+    large: { x: 36 + half, y: y + 188, w: half, h: bh },
+    back: { x: W / 2 - 44, y: H - 42 - Safe.b, w: 88, h: largeText ? 28 : 26 },
+    y,
+  };
 }
 function openSettings(from) { Settings.from = from || "title"; Settings.sel = 0; setScreen("settings"); }
 function settingsAct(i) {
@@ -3417,35 +3502,45 @@ function settingsAct(i) {
   else if (i === 1) Snd.toggle();
   else if (i === 2) { setEasy(!easy); Snd.tone(660, 0.04, 0.05); }
   else if (i === 4) { Music.toggle(); Snd.tone(620, 0.04, 0.05); }
+  else if (i === 5) { setLargeText(!largeText); Snd.tone(700, 0.04, 0.05); }
   else setScreen(Settings.from);
 }
-function settingsTap(p) { const L = settingsLayout(); [L.controls, L.sound, L.easy, L.back, L.music].forEach((b, i) => { if (inRect(p, b)) { Settings.sel = i; settingsAct(i); } }); }
+function settingsTap(p) {
+  const L = settingsLayout();
+  [L.controls, L.sound, L.easy, L.back, L.music, L.large].forEach((b, i) => {
+    if (b && inRect(p, b)) { Settings.sel = i; settingsAct(i); }
+  });
+}
 function settingsKey(code) {
   if (code === "Escape" || code === "Backspace" || code === "KeyG") { setScreen(Settings.from); return; }
-  const ORD = [0, 1, 4, 2, 3], at = Math.max(0, ORD.indexOf(Settings.sel));   // visual order: controls, sound, music, difficulty, back
-  if (code === "ArrowUp" || code === "KeyW") Settings.sel = ORD[(at + 4) % 5];
-  else if (code === "ArrowDown" || code === "KeyS") Settings.sel = ORD[(at + 1) % 5];
+  const ORD = [0, 1, 4, 2, 5, 3], at = Math.max(0, ORD.indexOf(Settings.sel));   // controls, sound, music, difficulty, large, back
+  const n = ORD.length;
+  if (code === "ArrowUp" || code === "KeyW") Settings.sel = ORD[(at + n - 1) % n];
+  else if (code === "ArrowDown" || code === "KeyS") Settings.sel = ORD[(at + 1) % n];
   else if (["Enter", "Space", "ArrowLeft", "ArrowRight", "KeyA", "KeyD"].includes(code)) settingsAct(Settings.sel);
 }
 function drawSettings() {
   ctx.fillStyle = "#101030"; ctx.fillRect(0, 0, W, H);
   const L = settingsLayout();
-  textC("SETTINGS", L.y - 8, C.hardhat, 2);
-  text("CONTROLS", L.controls.x, L.controls.y - 11, C.acc2);
+  textC("SETTINGS", L.y - 6, C.hardhat, tk(2));
+  text("CONTROLS", L.controls.x, L.controls.y - 11, C.acc2, tk());
   drawButton(L.controls, controls === "one" ? "< ONE HAND >" : "< TWO HANDS >", Settings.sel === 0);
   const help = controls === "one" ? ["TAP ANYWHERE: CLIMB", "SWIPE LEFT/RIGHT: HOP", "SWIPE DOWN: CLIMB DOWN", "HOLD: HOLD TIGHT"]
     : ["TAP LEFT/RIGHT HALF: ARMS", "DOUBLE-TAP ONE SIDE: LEAP", "SWIPE DOWN: CLIMB DOWN", "HOLD: HOLD TIGHT"];
-  help.forEach((l, i) => text(l, L.controls.x + 4, L.controls.y + 31 + i * 10, C.hair3));
-  text("MUSIC", L.music.x + Math.round((L.music.w - textW("MUSIC")) / 2), L.music.y - 11, C.acc2);
+  help.forEach((l, i) => text(l, L.controls.x + 4, L.controls.y + L.controls.h + 3 + i * 9, C.hair3));
+  text("MUSIC", L.music.x + Math.round((L.music.w - textW("MUSIC", tk())) / 2), L.music.y - 11, C.acc2, tk());
   drawButton(L.music, Music.enabled ? "< ON >" : "< OFF >", Settings.sel === 4);
-  text("SOUND", L.sound.x + Math.round((L.sound.w - textW("SOUND")) / 2), L.sound.y - 11, C.acc2);
+  text("SOUND", L.sound.x + Math.round((L.sound.w - textW("SOUND", tk())) / 2), L.sound.y - 11, C.acc2, tk());
   drawButton(L.sound, Snd.muted ? "< OFF >" : "< ON >", Settings.sel === 1);
-  text("KEYBOARD WORKS IN BOTH MODES", L.sound.x + 4, L.sound.y + 36, C.hair3);
-  text("HAPTICS FOLLOW SOUND", L.sound.x + 4, L.sound.y + 46, C.hair3);
-  text("DIFFICULTY", L.easy.x, L.easy.y - 11, C.acc2);
+  text("KEYBOARD WORKS IN BOTH MODES", L.sound.x + 4, L.sound.y + L.sound.h + 6, C.hair3);
+  text("HAPTICS FOLLOW SOUND", L.sound.x + 4, L.sound.y + L.sound.h + 16, C.hair3);
+  text("DIFFICULTY", L.easy.x + Math.round((L.easy.w - textW("DIFFICULTY", tk())) / 2), L.easy.y - 11, C.acc2, tk());
   drawButton(L.easy, easy ? "< EASY >" : "< NORMAL >", Settings.sel === 2);
-  text(easy ? "SLOWER HAZARDS, SOFTER BUMPS," : "THE GIANTS GET TOUGHER AS YOU GO", L.easy.x + 4, L.easy.y + 34, C.hair3);
-  if (easy) text("A FEW LESS COINS (X0.8)", L.easy.x + 4, L.easy.y + 44, C.hair3);
+  text("TEXT", L.large.x + Math.round((L.large.w - textW("TEXT", tk())) / 2), L.large.y - 11, C.acc2, tk());
+  drawButton(L.large, largeText ? "< LARGE >" : "< NORMAL >", Settings.sel === 5);
+  text(easy ? "SLOWER HAZARDS, SOFTER BUMPS" : "THE GIANTS GET TOUGHER AS YOU GO", 28, L.easy.y + L.easy.h + 6, C.hair3);
+  if (easy) text("A FEW LESS COINS (X0.8)", 28, L.easy.y + L.easy.h + 16, C.hair3);
+  else text(largeText ? "BIGGER MENU + HUD LABELS" : "TAP LARGE FOR BIGGER LABELS", 28, L.easy.y + L.easy.h + 16, C.hair3);
   drawButton(L.back, "BACK", Settings.sel === 3);
 }
 let sceneStart = 0;                          // performance.now() when the current scene began
@@ -3518,7 +3613,10 @@ function levelsLayout() {
   const sc = Levels.scroll;
   const rows = rowsRaw.map((r) => ({ x: r.x, y: listTop + r.y - sc, w: r.w, h: r.h, lv: r.lv }));
   const heads = headsRaw.map((h) => ({ y: listTop + h.y - sc, w: h.w }));
-  return { rows, heads, rowsRaw, headsRaw, back, play, daily, rh, listTop, listBot, viewH, contentH, maxScroll };
+  let ending = null;
+  if (beaten && LV_ROWS[Levels.sel] && LV_ROWS[Levels.sel].id === "ultimate") { play.w -= 64; ending = { x: play.x + play.w + 4, y: play.y, w: 60, h: bh };
+    { const my = MUTE.y(); if (ending.y < my + MUTE.h && ending.y + ending.h > my && ending.x + ending.w > MUTE.x - 2) { const d = ending.x + ending.w - (MUTE.x - 3); ending.w -= d; if (ending.w < 44) { play.w -= 44 - ending.w; ending.x -= 44 - ending.w; ending.w = 44; } } } }
+  return { rows, heads, rowsRaw, headsRaw, back, play, daily, ending, rh, listTop, listBot, viewH, contentH, maxScroll };
 }
 function levelsEnsureSelVisible() {
   const L = levelsLayout(), r = L.rowsRaw[Levels.sel]; if (!r) return;
@@ -3534,11 +3632,13 @@ function levelsAct(i) {
   else if (st === "locked") { Levels.toast = ["CHEER UP " + THE_NAMES[UNLOCK_BY[lv.id]], "TO UNLOCK " + THE_NAMES[lv.id] + "!"]; Levels.toastT = now; Snd.tone(330, 0.08, 0.05); }
   else { Levels.toast = [lv.name + " IS COMING SOON!"]; Levels.toastT = now; Snd.tone(392, 0.08, 0.05, "triangle"); }
 }
+function replayEnding() { goLevel("ultimate", () => startStory("levels")); }
 function levelsBack() { Levels.ptr = null; if (Levels.from === "results") setScreen("results"); else setScreen("title"); }
 function levelsTap(p) {
   const L = levelsLayout();
   if (inRect(p, L.daily)) { openDaily("levels"); return; }
   if (inRect(p, L.back)) { levelsBack(); return; }
+  if (L.ending && inRect(p, L.ending)) { replayEnding(); return; }
   if (inRect(p, L.play)) { levelsAct(Levels.sel); return; }
   if (p.y < L.listTop || p.y >= L.listBot) return;
   for (let i = 0; i < L.rows.length; i++) {
@@ -3614,6 +3714,7 @@ function drawLevels() {
   }
   const sel = LV_ROWS[Levels.sel], sst = levelState(sel.id);
   drawButton(L.back, "BACK", false);
+  if (L.ending) drawButton(L.ending, "ENDING", Math.floor(t * 2) % 2 === 0, C.acc2);
   drawButton(L.play, sst === "open" ? "PLAY " + sel.name : sst === "locked" ? "LOCKED" : "COMING SOON", sst === "open" && Math.floor(t * 2) % 2 === 0, sst === "open" ? null : "#605878");
   if (Levels.toast && now - Levels.toastT < 2400) {
     const n = Levels.toast.length, h = n * 10 + 8, y = Math.round(H / 2) - h;
@@ -3922,9 +4023,9 @@ function startEnding() {
   S.haz.length = 0; S.sneeze.phase = "none"; S.cl.hold = false; S.mouthOpenUntil = -1;
   for (const it of S.items) sparkle(it.x, it.z, 4, C.white);   // leftover hats / pages twinkle away
   S.items.length = 0;
-  whiskBurst(S.cl.x, S.cl.z + 1.4, 30);                        // win whisker-burst
-  uiBurst(W / 2, Math.round(H * 0.28), 24);
-  if (!REDUCE_MOTION) S.shake = Math.max(S.shake, 2.2);
+  whiskBurst(S.cl.x, S.cl.z + 1.4, 34);                        // win whisker-burst
+  uiBurst(W / 2, Math.round(H * 0.28), 28);
+  if (!REDUCE_MOTION) { S.shake = Math.max(S.shake, 2.6); S.winFlash = true; }  // brief big win flash
   S.camPunchT = 0;                                             // punch-in zoom (Ending.t timeline)
   haptic("win");
   popText("YAY!", S.cl.x, S.cl.z + 2.6, C.hardhat, 1.1);
@@ -3942,7 +4043,7 @@ function storyFx(dt) {
   S.t += dt;
   const cl = S.cl;
   if (cl.tw) { const k = Math.min(1, (S.t - cl.tw.t0) * 1000 / (cl.tw.ms || T.CLIMB_MS)); cl.z = cl.tw.fromZ + (cl.tw.toZ - cl.tw.fromZ) * k; if (k >= 1) cl.tw = null; }
-  for (const f of S.fx) { f.vz -= (f.hat || f.slap ? 14 : 6) * dt; f.x += f.vx * dt; f.z += f.vz * dt; }
+  for (const f of S.fx) { f.vz -= (f.hat || f.slap ? 14 : f.dust ? 2.4 : 6) * dt; f.x += f.vx * dt; f.z += f.vz * dt; }
   S.fx = S.fx.filter((f) => S.t - f.t0 < f.dur);
   S.texts = S.texts.filter((t) => S.t - t.t0 < t.dur);
   S.shake = Math.max(0, S.shake - dt * 10);
@@ -4073,6 +4174,11 @@ function drawEnding() {
   const st = STORY(), caps = st.caps
     || [[0, "YOU MADE IT, PIP!"], [0.8, "HERE'S YOUR SPELL BOOK!"], [2.0, "AND YOUR SLEEPY KITTY..."],
        [3.1, "THE WIZARD SMILES..."], [3.8, "...AND YAWNS..."], [4.5, "SHHH! HE'S FAST ASLEEP."]];
+  // Bigger brief win flash (skipped when prefers-reduced-motion).
+  if (S.winFlash && !REDUCE_MOTION && t < 0.5) {
+    const a = t < 0.08 ? (t / 0.08) * 0.92 : Math.max(0, 0.92 * (1 - (t - 0.08) / 0.42));
+    ctx.fillStyle = "rgba(255,252,230," + a.toFixed(3) + ")"; ctx.fillRect(0, 0, W, H);
+  }
   if (S.flashT !== undefined && t - S.flashT < 0.35) {     // the selfie flash
     ctx.fillStyle = "rgba(255,255,255," + (1 - (t - S.flashT) / 0.35).toFixed(2) + ")"; ctx.fillRect(0, 0, W, H);
   }
@@ -4220,6 +4326,7 @@ function showResults() {
   S.result = r;
   if (S.score > hiscore) { hiscore = S.score; localStorage.setItem("bc_hi", hiscore); }
   bank(true);
+  if (LEVEL === "ultimate" && !beaten && !S.daily && !S.endless) { startStory("title"); return; }
   setScreen("results"); inputLockUntil = now + 900; sfx.win();
 }
 function resultsLayout() {
@@ -4575,6 +4682,7 @@ function advance(p) {
   if (screen === "levels") { if (p) levelsTap(p); else levelsAct(Levels.sel); return true; }
   if (screen === "settings") { if (p) settingsTap(p); else settingsAct(Settings.sel); return true; }
   if (screen === "cine") { endCine(); return true; }
+  if (screen === "story") { storyTap(p); return true; }
   if (screen === "intro") { startPlayFromIntro(); return true; }
   if (screen === "ending") { startPara(); return true; }
   if (screen === "bird") { showResults(); return true; }
@@ -4766,6 +4874,174 @@ document.addEventListener("keyup", (e) => {
 let paused = false;
 document.addEventListener("visibilitychange", () => { Music.visibility(document.hidden); if (document.hidden && Snd.ctx) Snd.ctx.suspend(); else if (Snd.ctx) Snd.ctx.resume(); lastFrame = 0; });
 
+// ================================================================ the story ending (after the Ultimate Beard, first win)
+// 7 tap-to-advance panels -> credits -> title. bc_beaten = "1" unlocks the title crown + replay (level select).
+let beaten = localStorage.getItem("bc_beaten") === "1";
+const Story = { i: 0, t: 0, credits: false, ct: 0, from: "title" };
+const STORY_PANELS = [
+  { id: "medal", head: ["THE MEDAL FITS!"], body: ["THE ULTIMATE BEARD", "LOOKS DOWN AT PIP...", "AND SMILES SO HARD", "ITS WHISKERS CURL."] },
+  { id: "sneeze", head: ["AH... AH...", "ACHOOO!!"], body: ["A HAPPY SNEEZE!", "EVERY GIANT FROM EVERY", "BEARD TUMBLES OUT", "OF THE WHISKERS!"] },
+  { id: "party", head: ["BEARD PARTY!"], body: ["SANTA BRINGS COOKIES.", "THE YETI BRINGS COCOA.", "THE GOAT EATS", "GRANDPA'S PHONE. AGAIN."] },
+  { id: "sincere", head: ["PIP SITS DOWN."], body: ["ALL THAT CLIMBING...", "WAS JUST A VERY LONG", "WAY OF SAYING HI.", "(THEY ALL SAID HI BACK.)"] },
+  { id: "nap", head: ["THE END?"], body: ["PIP NAPS IN THE", "COZIEST BEARD EVER.", "EVEN BIGFOOT TIPTOES.", "(HE IS BAD AT IT.)"] },
+  { id: "rumble", head: ["...RUMBLE."], body: ["THE MOUNTAINS ON THE", "HORIZON WIGGLE.", "MOUNTAINS DON'T", "USUALLY WIGGLE."] },
+  { id: "hanger", head: ["THAT'S NO", "MOUNTAIN..."], body: ["IT'S A CHIN.", "THE ULTIMATE BEARD", "...HAS A GRANDPA."], tbc: true },
+];
+const CREDITS = [
+  ["BEARD CLIMBER", C.hardhat, 2], ["", null, 1],
+  ["STARRING PIP", C.white, 1], ["AND 48 VERY HAIRY FRIENDS", C.hair3, 1], ["", null, 1],
+  ["THANKS FOR CLIMBING:", C.acc2, 1], ["GRANDPA  BIGFOOT  SANTA", C.white, 1], ["THE WIZARD  THE SEA KING", C.white, 1],
+  ["EL PATRON  THE ORIGAMI BEARD", C.white, 1], ["THE ULTIMATE BEARD", C.white, 1], ["(AND THE GOAT, SORRY)", C.hair3, 1], ["", null, 1],
+  ["MADE BY", C.hardhat, 2], ["ROBERT CLAPP", C.hardhat, 2], ["", null, 1],
+  ["(C) ROBERT CLAPP.", C.white, 1], ["ALL RIGHTS RESERVED.", C.white, 1],
+];
+const CREDIT_SPEED = 28;                         // px / s
+function creditsLen() { return (CREDITS.length * 14 + H + 40) / CREDIT_SPEED; }
+function startStory(from) { Story.i = 0; Story.t = 0; Story.credits = false; Story.ct = 0; Story.from = from || "title"; setScreen("story"); inputLockUntil = now + 600; sfx.win && sfx.win(); }
+function markBeaten() { beaten = true; localStorage.setItem("bc_beaten", "1"); }
+function endStory() { markBeaten(); Story.credits = false; if (Story.from === "levels") openLevels("title"); else setScreen("title"); }
+function storySkipBtn() { return { x: W - 74 - Safe.r, y: 3 + Safe.t, w: 70, h: largeText ? 22 : 18 }; }
+function storyNext() {
+  if (Story.credits) { endStory(); return; }
+  const cp = STORY_PANELS[Story.i], full = cp ? String(cp.body || "").length : 0;
+  if (!REDUCE_MOTION && cp && Math.floor(Story.t * 40) < full + 4) { Story.t = Math.max(Story.t, (full + 4) / 40, 1.25); return; }   // first tap finishes the line
+  Story.t = 0; Snd.tone(660 + Story.i * 40, 0.06, 0.05, "triangle");
+  if (++Story.i >= STORY_PANELS.length) { Story.credits = true; Story.ct = 0; markBeaten(); }
+  window.bcHaptic && window.bcHaptic("light");
+}
+function storySkip() { if (!Story.credits) { Story.credits = true; Story.ct = 0; markBeaten(); } else endStory(); }
+function storyTap(p) { if (p && inRect(p, storySkipBtn())) storySkip(); else storyNext(); }
+function updateStory(dt) { Story.t += dt; if (Story.credits) { Story.ct += dt; if (Story.ct >= creditsLen()) endStory(); } }
+/** Wrap lines so they fit at scale k (LARGE TEXT doubles body text). */
+function wrapLines(lines, k) {
+  const max = Math.floor((W - 12) / (6 * k)), out = [];
+  for (const l of lines) { let cur = ""; for (const w of l.split(" ")) { const n = cur ? cur + " " + w : w; if (n.length > max && cur) { out.push(cur); cur = w; } else cur = n; } out.push(cur); }
+  return out;
+}
+const wob = (t, a, s) => REDUCE_MOTION ? 0 : Math.round(Math.sin(t * s) * a);
+function sky(top, bot) { const g = ctx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, top); g.addColorStop(1, bot); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+function blob(x, y, rx, ry, col) { ctx.fillStyle = col; ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); }
+function hills(y, col) { ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(0, H); for (let x = 0; x <= W; x += 8) ctx.lineTo(x, y + Math.sin(x * 0.05) * 6); ctx.lineTo(W, H); ctx.fill(); }
+function bigBeard(cx, top, w, h, col, t) {     // a chunky code-drawn beard with a face
+  blob(cx, top + 14, w * 0.42, 20, "#f0c090");                                  // face
+  ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(cx - w / 2, top + 22);
+  for (let i = 0; i <= 8; i++) { const x = cx - w / 2 + (w * i) / 8; ctx.lineTo(x, top + h + (i % 2 ? -10 : 0) + wob(t + i, 2, 3)); }
+  ctx.lineTo(cx + w / 2, top + 22); ctx.fill();
+  ctx.fillStyle = "#000"; ctx.fillRect(cx - 14, top + 8, 4, 4); ctx.fillRect(cx + 10, top + 8, 4, 4);   // eyes
+}
+function giantHead(x, y, col, hat, t, i) {      // tiny giant cameo: face + beard + hat colour
+  const b = wob(t + i, 2, 6);
+  blob(x, y + b, 9, 8, "#f0c090"); blob(x, y + 9 + b, 10, 8, col);
+  ctx.fillStyle = "#000"; ctx.fillRect(x - 4, y - 2 + b, 2, 2); ctx.fillRect(x + 2, y - 2 + b, 2, 2);
+  if (hat) { ctx.fillStyle = hat; ctx.fillRect(x - 8, y - 11 + b, 16, 5); }
+}
+const CAMEOS = [["#e8e8e8", "#c03030"], ["#7a4a20", null], ["#a8a8a8", "#2040a0"], ["#f8f8f8", "#d02020"], ["#604020", "#202020"], ["#d8d0f0", "#6040c0"], ["#f0d040", "#8a5a20"]];
+function drawStoryArt(id, t) {
+  const cx = W / 2, baseY = Math.round(H * 0.58);
+  if (id === "medal") {
+    sky("#402070", "#e07050"); stars(t, 20);
+    bigBeard(cx, 30 + Safe.t, 170, 150, "#c8c0e8", t);
+    blob(cx, 70 + Safe.t, 18, 5, "#000"); blob(cx, 66 + Safe.t, 18, 4, "#f0c090");          // big smile
+    const py = 150 + Safe.t + wob(t, 2, 4); drawPip(cx, py, "c" + (Math.floor(t * 6) % 8), { head: 0, pack: true, cat: true });
+    blob(cx, py - 40, 6, 6, C.hardhat); ctx.fillStyle = "#e04040"; ctx.fillRect(cx - 2, py - 52, 4, 8);   // medal held high
+    if (Math.floor(t * 3) % 2) goodSparkle(cx, py - 40, t);
+  } else if (id === "sneeze") {
+    sky("#204070", "#60a0e0");
+    const k = Math.min(1, t * 1.5), sh = k >= 1 ? wob(t, 3, 40) : 0;
+    bigBeard(cx + sh, 20 + Safe.t, 170, 120, "#c8c0e8", t);
+    CAMEOS.forEach((c, i) => {                    // giants spray out of the beard in arcs
+      const a = -Math.PI + (i + 0.5) * Math.PI / CAMEOS.length, d = 20 + k * 80;
+      giantHead(cx + Math.cos(a) * d, 120 + Safe.t - Math.sin(a) * d * 0.3 + k * 40, c[0], c[1], t, i);
+    });
+    drawPip(cx + 70, 200 + Safe.t, "fall", { head: 0, pack: true, cat: true });
+  } else if (id === "party") {
+    sky("#301848", "#b04878"); stars(t, 16);
+    for (let i = 0; i < 18; i++) { ctx.fillStyle = ["#f8e848", "#58b848", "#60b8f8", "#e04040"][i % 4]; ctx.fillRect((i * 37 + Math.floor(t * 20)) % W, (i * 23 + Math.floor(t * 40)) % H, 3, 3); }   // confetti
+    hills(baseY + 40, "#283050");
+    CAMEOS.forEach((c, i) => giantHead(22 + i * 30, baseY + 20 + ((i % 2) ? 0 : -6), c[0], c[1], t * 2, i));
+    blob(46, baseY + 52, 6, 3, "#c08040"); blob(166, baseY + 52, 5, 6, "#603010");    // cookie, cocoa
+    drawPip(cx, baseY + 70 - Math.abs(wob(t, 8, 7)), "dyno", { head: 0, pack: true, cat: true });
+  } else if (id === "sincere") {
+    sky("#f08048", "#402060"); blob(cx, baseY + 10, 34, 34, "#f8d060");                   // sunset
+    hills(baseY + 30, "#c8c0e8"); hills(baseY + 46, "#a8a0c8");
+    drawPip(cx, baseY + 40, "hold", { head: 0, pack: true, cat: true });
+    for (let i = 0; i < 5; i++) giantHead(26 + i * 44, baseY + 74, CAMEOS[i][0], CAMEOS[i][1], t * 0.5, i);
+  } else if (id === "nap") {
+    sky("#101030", "#203060"); stars(t, 40); blob(40, 50 + Safe.t, 14, 14, "#f8f0c0"); blob(46, 46 + Safe.t, 12, 12, "#101030");
+    hills(baseY + 20, "#c8c0e8");
+    drawPip(cx, baseY + 36, "hold", { head: 0, pack: true, cat: true });
+    if (!REDUCE_MOTION) for (let i = 0; i < 3; i++) text("Z", cx + 10 + i * 8, baseY - 2 - ((t * 10 + i * 8) % 24), C.white, 1 + (i === 2 ? 1 : 0));
+    giantHead(190 - (t * 6) % 40, baseY + 10, "#604020", "#202020", t, 2);              // tiptoeing Bigfoot
+  } else if (id === "rumble") {
+    sky("#203058", "#e08850");
+    const sh = wob(t, 2, 30);
+    ctx.fillStyle = "#4a3a60"; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(i * 90 - 20 + sh, baseY); ctx.lineTo(i * 90 + 40 + sh, baseY - 70 - i * 10); ctx.lineTo(i * 90 + 100 + sh, baseY); ctx.fill(); }
+    hills(baseY, "#c8c0e8");
+    drawPip(cx, baseY + 30, "hold", { head: 0, pack: true, cat: true });
+    if (Math.floor(t * 4) % 2) text("!", cx - 2, baseY - 4, C.hardhat, 2);
+  } else if (id === "hanger") {
+    sky("#100818", "#402048");
+    const rise = REDUCE_MOTION ? 1 : Math.min(1, t * 0.6), cy = Math.round(64 + (1 - rise) * 80) + Safe.t;
+    blob(cx, cy + 10, 200, 60, "#e0b080");                                                 // a sky-sized face
+    blob(cx - 56, cy, 22, 14, "#fff"); blob(cx + 56, cy, 22, 14, "#fff");                 // eyes opening
+    blob(cx - 56 + wob(t, 6, 1.3), cy + 2, 8, 9, "#000"); blob(cx + 56 + wob(t, 6, 1.3), cy + 2, 8, 9, "#000");
+    ctx.fillStyle = "#e8e8f8";                                                             // a beard bigger than the sky
+    for (let i = 0; i < 14; i++) { const x = i * 18 - 8; ctx.fillRect(x, cy + 44 + (i % 2) * 4, 16, H); }
+    hills(Math.round(H * 0.74), "#c8c0e8");                                                // our little Ultimate Beard
+    const hy = Math.round(H * 0.58) + wob(t, 4, 2);                                       // Pip hangs from ONE hair
+    ctx.fillStyle = "#c8c8e0"; ctx.fillRect(cx + 40, cy + 44, 2, hy - cy - 50);
+    drawPip(cx + 41, hy, "hold", { head: 0, pack: true, cat: true });
+  }
+}
+function drawStory() {
+  const t = Story.t;
+  if (Story.credits) { drawCredits(); return; }
+  const pnl = STORY_PANELS[Story.i];
+  if (!pnl || screen !== "story") return;
+  drawStoryArt(pnl.id, t);
+  const hk = 2, bk = largeText ? 2 : 1;
+  const head = wrapLines(pnl.head, hk), body = wrapLines(pnl.body, bk);
+  const boxH = head.length * 18 + body.length * (bk * 9) + 14, by = H - boxH - 16 - Safe.b;
+  ctx.fillStyle = "rgba(10,6,24,0.82)"; ctx.fillRect(4, by, W - 8, boxH);
+  ctx.fillStyle = C.hardhat; ctx.fillRect(4, by, W - 8, 1); ctx.fillRect(4, by + boxH - 1, W - 8, 1);
+  let y = by + 6;
+  head.forEach((l) => { textC(l, y, C.hardhat, hk); y += 18; });
+  const show = REDUCE_MOTION ? 1e9 : Math.floor(t * 40);                      // typewriter, tap shows the rest next
+  let used = 0;
+  body.forEach((l) => { const n = Math.max(0, Math.min(l.length, show - used)); used += l.length; if (n) text(l.slice(0, n), Math.round((W - textW(l, bk)) / 2), y, C.white, bk); y += bk * 9; });
+  if (pnl.tbc && t > 1.2) {
+    const yy = Math.round(H * 0.31) + Safe.t, pulse = REDUCE_MOTION || Math.floor(t * 2) % 2;
+    ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(0, yy - 6, W, 40);
+    textC("TO BEARD", yy, pulse ? C.hardhat : C.white, 2); textC("CONTINUED...", yy + 16, pulse ? C.hardhat : C.white, 2);
+  }
+  // progress dots + skip
+  for (let i = 0; i < STORY_PANELS.length; i++) { ctx.fillStyle = i === Story.i ? C.hardhat : "#605878"; ctx.fillRect(W / 2 - STORY_PANELS.length * 4 + i * 8, H - 10 - Safe.b, 4, 4); }
+  drawButton(storySkipBtn(), "TAP TO SKIP", false);
+  if (t > 1 && Math.floor(t * 2) % 2) text("TAP >", 6 + Safe.l, 6 + Safe.t, C.hair3);
+}
+function drawCredits() {
+  ctx.fillStyle = "#08061a"; ctx.fillRect(0, 0, W, H); stars(Story.ct, 30);
+  const y0 = H - Story.ct * CREDIT_SPEED;
+  let y = y0;
+  for (const [s, col, k] of CREDITS) { if (s) { const kk = largeText && textW(s, 2) <= W - 8 ? 2 : k; textC(s, Math.round(y), col, kk); } y += 14 + (k > 1 ? 6 : 0); }
+  // the beard hanger again: the giant eye peeks back in once the credits are done
+  const endY = Math.max(Math.round(H * 0.55), Math.round(y + 30));
+  if (y < H * 0.6) {
+    blob(W / 2, endY + 30, 120, 30, "#e0b080"); blob(W / 2 - 34, endY + 18, 12, 7, "#fff"); blob(W / 2 + 34, endY + 18, 12, 7, "#fff");
+    blob(W / 2 - 34 + wob(Story.ct, 4, 1.5), endY + 19, 4, 5, "#000"); blob(W / 2 + 34 + wob(Story.ct, 4, 1.5), endY + 19, 4, 5, "#000");
+    textC("TO BEARD CONTINUED...", endY - 10, C.hardhat, largeText ? 1 : 1);
+  }
+  drawButton(storySkipBtn(), "TAP TO SKIP", false);
+}
+function drawBeatenMark(y) {                     // title crown once the story ending has been seen
+  if (!beaten) return;
+  const x = W / 2, c = C.hardhat;
+  ctx.fillStyle = c; ctx.fillRect(x - 12, y + 6, 24, 6);
+  for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.moveTo(x - 12 + i * 12, y + 7); ctx.lineTo(x - 6 + i * 6 - (i - 1) * 0, y - 2); ctx.lineTo(x - 12 + i * 12 + 6 + (i === 2 ? 0 : 0), y + 7); ctx.fill(); }
+  ctx.fillStyle = "#e04040"; ctx.fillRect(x - 1, y + 8, 3, 3);
+  text("BEARD BEATER", Math.round(x - textW("BEARD BEATER") / 2), y + 15, C.hardhat);
+}
+
 // ---------------------------------------------------------------- test / debug hooks (used by web/test_game.py)
 window.BC = {
   get S() { return S; }, get screen() { return screen; }, STORIES, T, get GOAL_Z() { return GOAL_Z; }, get MOUTH_Z() { return MOUTH_Z; }, get START_Z() { return START_Z; },
@@ -4783,6 +5059,7 @@ window.BC = {
   get Shop() { return Shop; }, CATALOG, shopLayout, openShop, TITLE_SHOP_BTN, optValues,
   hazardPace, get EXTRA_ROWS() { return EXTRA_ROWS; }, get shelterNow() { return !!shelterNow(); }, placeShelters, setBoosts(inv, eq) { boosts = Object.assign(boosts, inv); boostEq = eq.slice(); saveShop(); },
   get cssScale() { return cv.getBoundingClientRect().width / W; },
+  startStory, storyNext, storySkip, storyTap, storySkipBtn, replayEnding, get Story() { return Story; }, STORY_PANELS, get beaten() { return beaten; }, creditsLen,
   startCine, startIntro, startPara, startBird, showResults, steer,
   creatorLayout, resultsLayout, TITLE_INTRO_BTN, OPTS,
   win() { this.calm(); this.set({ z: GOAL_Z - 0.01 }); finishTween(); endGame(true); },
@@ -4805,6 +5082,7 @@ window.BC = {
   SLAP_KINDS, isSlap, slapHit, slapKind, stuckNow, drawSlapSprite,
   get REDUCE_MOTION() { return REDUCE_MOTION; }, whiskBurst, uiBurst, scorePop, pipSquash,
   get Safe() { return Safe; }, syncSafe, haptic, camPunchScale,
+  noteCombo, resetCombo, landDust, get largeText() { return largeText; }, setLargeText, tk,
   getSlap(id) { return (T_LEVELS[id] && T_LEVELS[id].SLAP) ? T_LEVELS[id].SLAP.slice() : null; },
   getSlapChance(id) { return (T_LEVELS[id] && T_LEVELS[id].SLAP_CHANCE) || 0; },
 };
