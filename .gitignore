@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+web/build/
+out/
+web/shots/
+.index-*.tmp
+.DS_Store
+.env
+.env.*
+*.blend1
+*.blend2

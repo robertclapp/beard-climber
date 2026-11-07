@@ -1,0 +1,16 @@
+{
+  "name": "beard-climber-source",
+  "private": true,
+  "scripts": {
+    "build:runtime": "python3 web/build_runtime.py",
+    "check:runtime": "python3 web/build_runtime.py --check",
+    "test": "node --test web/tests/*.test.cjs",
+    "test:build": "python3 -m unittest discover -s web/tests -p 'test_*.py'",
+    "check": "npm run check:runtime && npm test && npm run test:build",
+    "test:browser": "python3 web/test_game.py",
+    "release:package": "npm run check && python3 web/package_release.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
